@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#b71c1c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Wasserkarte">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+<title>Wasserkarte</title>
+</head>
+<body>
+
+<header id="top">
+  <div id="title">💧 Wasserentnahmestellen</div>
+  <span id="net" class="badge">online</span>
+  <button id="btn-menu" aria-label="Menü">☰</button>
+</header>
+
+<main id="map-wrap">
+  <div id="map">
+    <div id="tiles"></div>
+    <svg id="lines" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="markers"></div>
+  </div>
+  <div id="hint"></div>
+  <div id="zoom">
+    <button id="zin" aria-label="Hineinzoomen">+</button>
+    <button id="zout" aria-label="Herauszoomen">−</button>
+  </div>
+  <button id="btn-gps" aria-label="Mein Standort">◎</button>
+  <div id="attr">© OpenStreetMap-Mitwirkende</div>
+</main>
+
+<section id="sheet">
+  <div id="modes">
+    <button id="mode-einsatz" class="on">📍 Einsatzort</button>
+    <button id="mode-neu">➕ Stelle eintragen</button>
+  </div>
+  <div id="result"></div>
+</section>
+
+<!-- Entnahmestelle anlegen / bearbeiten -->
+<dialog id="dlg-stelle">
+  <h2 id="dlg-title">Entnahmestelle</h2>
+  <label>Bezeichnung
+    <input id="f-name" type="text" placeholder="z. B. Hydrant vor Nr. 12" autocomplete="off">
+  </label>
+  <label>Art
+    <select id="f-typ"></select>
+  </label>
+  <label>Ergiebigkeit (l/min, optional)
+    <input id="f-lmin" type="number" inputmode="numeric" min="0" step="10" placeholder="z. B. 800">
+  </label>
+  <label>Bemerkung (optional)
+    <textarea id="f-bem" rows="2" placeholder="z. B. Unterflurhydrant, Deckel links vom Gehweg"></textarea>
+  </label>
+  <div id="f-coords" class="coords"></div>
+  <button id="f-gps" class="secondary" type="button">Meinen Standort übernehmen</button>
+  <div class="row">
+    <button id="f-del" class="danger" type="button">Löschen</button>
+    <span class="spacer"></span>
+    <button id="f-cancel" class="secondary" type="button">Abbrechen</button>
+    <button id="f-save" type="button">Speichern</button>
+  </div>
+</dialog>
+
+<!-- Daten & Offline -->
+<dialog id="dlg-menu">
+  <h2>Daten &amp; Offline</h2>
+  <p id="m-info" class="muted"></p>
+
+  <h3>Offline-Karte</h3>
+  <p class="muted">Speichert den aktuell sichtbaren Kartenausschnitt (mit etwas Rand) in den Zoomstufen 15–18 auf diesem Gerät. Einmal mit Internet ausführen.</p>
+  <button id="m-prefetch" type="button">Kartenausschnitt offline speichern</button>
+  <p id="m-progress" class="muted"></p>
+
+  <h3>Daten zwischen Geräten</h3>
+  <p class="muted">Die Stellen liegen nur auf diesem Gerät. Zum Abgleich: exportieren und auf dem anderen Gerät importieren.</p>
+  <div class="row">
+    <button id="m-export" type="button">Exportieren</button>
+    <button id="m-import" class="secondary" type="button">Importieren</button>
+  </div>
+  <input id="m-file" type="file" accept=".json,application/json" hidden>
+  <p id="m-msg" class="muted"></p>
+
+  <div class="row">
+    <button id="m-clear" class="danger" type="button">Alle Stellen löschen</button>
+    <span class="spacer"></span>
+    <button id="m-close" type="button">Schließen</button>
+  </div>
+  <p class="muted small">Entfernungen sind Luftlinie. Die App ersetzt weder Ortskenntnis noch Einsatzleitung. Kartendaten © OpenStreetMap-Mitwirkende.</p>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
