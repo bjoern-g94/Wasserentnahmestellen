@@ -1,12 +1,14 @@
 // Service Worker: macht die App offline nutzbar.
 // Bei Änderungen an den App-Dateien die Versionsnummer erhöhen.
-const APP_CACHE = 'wk-app-v1';
+const APP_CACHE = 'wk-app-v4';
 const TILE_CACHE = 'wk-tiles-v1';
 const SHELL = [
   './',
   './index.html',
   './style.css',
   './app.js',
+  './addresses.json',
+  './mapdata.json',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png'

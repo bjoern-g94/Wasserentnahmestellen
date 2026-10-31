@@ -25,6 +25,7 @@
 <main id="map-wrap">
   <div id="map">
     <div id="tiles"></div>
+    <canvas id="vec"></canvas>
     <svg id="lines" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="markers"></div>
   </div>
@@ -34,6 +35,7 @@
     <button id="zout" aria-label="Herauszoomen">−</button>
   </div>
   <button id="btn-gps" aria-label="Mein Standort">◎</button>
+  <div id="outside">Außerhalb der eingebauten Karte. Unter ☰ „Zum Einsatzgebiet springen“ oder „OSM-Kartenbilder“ wählen.</div>
   <div id="attr">© OpenStreetMap-Mitwirkende</div>
 </main>
 
@@ -42,6 +44,10 @@
     <button id="mode-einsatz" class="on">📍 Einsatzort</button>
     <button id="mode-neu">➕ Stelle eintragen</button>
   </div>
+  <div id="search">
+    <input id="q" type="search" placeholder="Adresse, z. B. Adolphsdorfer Str. 12" autocomplete="off" autocorrect="off" autocapitalize="off" enterkeyhint="search">
+    <button id="q-go" type="button">Suchen</button>
+  </div>
   <div id="result"></div>
 </section>
 
@@ -49,16 +55,13 @@
 <dialog id="dlg-stelle">
   <h2 id="dlg-title">Entnahmestelle</h2>
   <label>Bezeichnung
-    <input id="f-name" type="text" placeholder="z. B. Hydrant vor Nr. 12" autocomplete="off">
+    <input id="f-name" type="text" placeholder="z. B. vor Hausnummer 12" autocomplete="off">
   </label>
   <label>Art
     <select id="f-typ"></select>
   </label>
-  <label>Ergiebigkeit (l/min, optional)
-    <input id="f-lmin" type="number" inputmode="numeric" min="0" step="10" placeholder="z. B. 800">
-  </label>
   <label>Bemerkung (optional)
-    <textarea id="f-bem" rows="2" placeholder="z. B. Unterflurhydrant, Deckel links vom Gehweg"></textarea>
+    <textarea id="f-bem" rows="2" placeholder="z. B. Deckel links vom Gehweg"></textarea>
   </label>
   <div id="f-coords" class="coords"></div>
   <button id="f-gps" class="secondary" type="button">Meinen Standort übernehmen</button>
@@ -75,8 +78,16 @@
   <h2>Daten &amp; Offline</h2>
   <p id="m-info" class="muted"></p>
 
-  <h3>Offline-Karte</h3>
-  <p class="muted">Speichert den aktuell sichtbaren Kartenausschnitt (mit etwas Rand) in den Zoomstufen 15–18 auf diesem Gerät. Einmal mit Internet ausführen.</p>
+  <h3>Kartenansicht</h3>
+  <p class="muted">Die eigene Karte ist in der App eingebaut (Straßen, Gebäude, Gewässer rund um das Einsatzgebiet) und braucht kein Internet. OSM-Kartenbilder sehen gewohnt aus, brauchen aber Internet oder einen vorher gespeicherten Ausschnitt.</p>
+  <div class="row">
+    <button id="m-base-vec" type="button">Eigene Karte</button>
+    <button id="m-base-osm" class="secondary" type="button">OSM-Kartenbilder</button>
+  </div>
+  <button id="m-home" class="secondary" type="button" style="width:100%;margin-top:8px">Zum Einsatzgebiet springen</button>
+
+  <h3>OSM-Kartenbilder offline speichern</h3>
+  <p class="muted">Nur nötig, wenn ihr die OSM-Kartenbilder nutzen wollt. Speichert den sichtbaren Ausschnitt (mit etwas Rand) auf diesem Gerät. Einmal mit Internet ausführen.</p>
   <button id="m-prefetch" type="button">Kartenausschnitt offline speichern</button>
   <p id="m-progress" class="muted"></p>
 
@@ -94,7 +105,7 @@
     <span class="spacer"></span>
     <button id="m-close" type="button">Schließen</button>
   </div>
-  <p class="muted small">Entfernungen sind Luftlinie. Die App ersetzt weder Ortskenntnis noch Einsatzleitung. Kartendaten © OpenStreetMap-Mitwirkende.</p>
+  <p class="muted small">Entfernungen sind Luftlinie. Die App ersetzt weder Ortskenntnis noch Einsatzleitung. Karten- und Adressdaten © OpenStreetMap-Mitwirkende.</p>
 </dialog>
 
 <script src="app.js"></script>

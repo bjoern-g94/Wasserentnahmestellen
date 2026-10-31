@@ -8,34 +8,42 @@
   const KEY_VIEW = 'wk_view_v1';
   const MINZ = 12, MAXZ = 19;
   const NEAREST_N = 5;
+  const MAX_TILES = 2500;   // Obergrenze für den Offline-Kartendownload
+  const ORT = 'Grasberg';   // Ortsbezug für die Online-Adresssuche
   const tileUrl = (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
 
   const TYPEN = {
-    hydrant:  { label: 'Hydrant',                         short: 'H', color: '#ef6c00' },
-    teich:    { label: 'Löschteich',                      short: 'T', color: '#1565c0' },
-    zisterne: { label: 'Zisterne / Löschwasserbehälter',  short: 'Z', color: '#00838f' },
-    brunnen:  { label: 'Löschwasserbrunnen',              short: 'B', color: '#2e7d32' },
-    saug:     { label: 'Saugstelle (Gewässer)',           short: 'S', color: '#6a1b9a' },
-    sonst:    { label: 'Sonstige',                        short: '?', color: '#616161' }
+    unterflur: { label: 'Unterflurhydrant',   short: 'U', color: '#ef6c00' },
+    brunnen:   { label: 'Löschwasserbrunnen', short: 'B', color: '#2e7d32' },
+    sonst:     { label: 'Sonstiges',          short: 'S', color: '#616161' }
   };
+  // Alte Einträge aus früheren Versionen werden beim Laden umgestellt
+  const TYP_ALT = { hydrant: 'unterflur' };
+  const ALT_LABEL = { teich: 'Löschteich', zisterne: 'Zisterne', saug: 'Saugstelle' };
 
   const $ = (s) => document.querySelector(s);
   const mapEl = $('#map'), tilesEl = $('#tiles'), markersEl = $('#markers'), linesEl = $('#lines');
 
   // ---------- Zustand ----------
   let stellen = loadStellen();
-  let view = loadView() || { lat: 53.19, lng: 8.99, z: 15 }; // grob Grasberg, wird gemerkt
+  const hadView = !!loadView();
+  let view = loadView() || { lat: 53.225, lng: 8.993, z: 15 }; // wird nach dem Laden der Karte auf das Einsatzgebiet gesetzt
   let mode = 'einsatz';      // 'einsatz' | 'neu'
   let einsatz = null;        // {lat,lng}
   let gps = null;            // {lat,lng}
   let editing = null;        // aktuell bearbeitete Stelle (oder null bei neu)
+  let base = 'vec';          // 'vec' = eingebaute Karte, 'osm' = OSM-Kartenbilder
+  try { base = localStorage.getItem('wk_base') || 'vec'; } catch (e) { /* ignorieren */ }
+  let vec = null;           // eingebaute Kartendaten
   let pendingPos = null;     // Position für neue / bearbeitete Stelle
+  let adressen = [];         // Offline-Adressliste (addresses.json)
+  let einsatzLabel = null;   // Beschriftung des Einsatzorts (Adresse), sonst null
 
   // ---------- Speicher ----------
   function loadStellen() {
     try {
       const a = JSON.parse(localStorage.getItem(KEY_DATA) || '[]');
-      return Array.isArray(a) ? a.filter(validStelle) : [];
+      return Array.isArray(a) ? a.filter(validStelle).map(normStelle) : [];
     } catch (e) { return []; }
   }
   function saveStellen() {
@@ -54,6 +62,14 @@
   }
   function validStelle(s) {
     return s && typeof s === 'object' && isFinite(s.lat) && isFinite(s.lng) && typeof s.id === 'string';
+  }
+  function normStelle(s) {
+    if (!TYPEN[s.typ]) {
+      if (ALT_LABEL[s.typ]) s.bem = ALT_LABEL[s.typ] + (s.bem ? ' – ' + s.bem : '');
+      s.typ = TYP_ALT[s.typ] || 'sonst';
+    }
+    delete s.lmin; // Ergiebigkeit wird nicht gespeichert
+    return s;
   }
   function newId() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -109,6 +125,151 @@
   }
 
   // ---------- Kartendarstellung ----------
+  // ---------- Eingebaute Karte (Vektordaten) ----------
+  const vecEl = $('#vec');
+  const vctx = vecEl.getContext('2d');
+  function decodeLine(p, extra) {
+    const n = p.length / 2, a = new Float64Array(n * 2);
+    let la = 0, ln = 0, mnA = 1e9, mnB = 1e9, mxA = -1e9, mxB = -1e9;
+    for (let i = 0; i < n; i++) {
+      la += p[2 * i]; ln += p[2 * i + 1];
+      const A = la / 1e5, B = ln / 1e5;
+      a[2 * i] = A; a[2 * i + 1] = B;
+      if (A < mnA) mnA = A; if (A > mxA) mxA = A; if (B < mnB) mnB = B; if (B > mxB) mxB = B;
+    }
+    return Object.assign({ a, bb: [mnA, mnB, mxA, mxB] }, extra);
+  }
+  function homeView() {
+    if (!vec) return;
+    const b = vec.bounds;
+    setView((b[0] + b[2]) / 2, (b[1] + b[3]) / 2, 15);
+  }
+  fetch('mapdata.json')
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      if (!j || !j.roads) return;
+      vec = {
+        bounds: j.bounds,
+        roads: j.roads.map((r) => decodeLine(r.p, { k: r.k, n: r.n })),
+        ww: j.ww.map((r) => decodeLine(r.p)),
+        water: j.water.map((r) => decodeLine(r.p)),
+        bld: j.bld.map((r) => decodeLine(r.p))
+      };
+      if (!hadView) homeView(); else render();
+      updateBaseButtons();
+    })
+    .catch(() => { /* ohne eingebaute Karte: OSM-Kartenbilder */ });
+
+  const ROAD = {
+    a: { m: 9, min: 3.2, fill: '#fbd08a', casing: '#c9a063' },
+    b: { m: 6, min: 2.6, fill: '#ffffff', casing: '#b8b0a6' },
+    c: { m: 3.5, min: 1.6, fill: '#fbfbfb', casing: '#c5beb4' }
+  };
+
+  function drawVec(w, h, z, left, top) {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = Math.round(w * dpr), ch = Math.round(h * dpr);
+    if (vecEl.width !== cw || vecEl.height !== ch) { vecEl.width = cw; vecEl.height = ch; }
+    const g = vctx;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = '#f2efe9';
+    g.fillRect(0, 0, w, h);
+    const tl = unproject(left - 30, top - 30, z), br = unproject(left + w + 30, top + h + 30, z);
+    const vis = (f) => f.bb[2] >= br.lat && f.bb[0] <= tl.lat && f.bb[3] >= tl.lng && f.bb[1] <= br.lng;
+    const ppm = (TILE * Math.pow(2, z)) / (40075016 * Math.cos(rad(view.lat)));
+    const trace = (f, close) => {
+      const a = f.a;
+      g.beginPath();
+      for (let i = 0; i < a.length; i += 2) {
+        const q = project(a[i], a[i + 1], z);
+        if (i === 0) g.moveTo(q.x - left, q.y - top); else g.lineTo(q.x - left, q.y - top);
+      }
+      if (close) g.closePath();
+    };
+    g.lineJoin = 'round'; g.lineCap = 'round';
+
+    // Wasserflächen und Gräben
+    g.fillStyle = '#aad3df';
+    vec.water.forEach((f) => { if (vis(f)) { trace(f, true); g.fill(); } });
+    g.strokeStyle = '#7fb4d9'; g.lineWidth = Math.max(1.2, 1.5 * ppm);
+    vec.ww.forEach((f) => { if (vis(f)) { trace(f, false); g.stroke(); } });
+
+    // Gebäude
+    g.fillStyle = '#d9d0c7'; g.strokeStyle = '#b6a99c'; g.lineWidth = 1;
+    vec.bld.forEach((f) => { if (vis(f)) { trace(f, true); g.fill(); g.stroke(); } });
+
+    // Wege (Feld- und Fußwege gestrichelt)
+    g.setLineDash([4, 3]); g.strokeStyle = '#b07d58'; g.lineWidth = 1.3;
+    vec.roads.forEach((f) => { if (f.k === 'd' && vis(f)) { trace(f, false); g.stroke(); } });
+    g.setLineDash([]);
+
+    // Straßen: erst Rand, dann Füllung
+    ['c', 'b', 'a'].forEach((k) => {
+      const st = ROAD[k], wd = Math.max(st.min, st.m * ppm);
+      const list = vec.roads.filter((f) => f.k === k && vis(f));
+      g.strokeStyle = st.casing; g.lineWidth = wd + 2;
+      list.forEach((f) => { trace(f, false); g.stroke(); });
+      g.strokeStyle = st.fill; g.lineWidth = wd;
+      list.forEach((f) => { trace(f, false); g.stroke(); });
+    });
+
+    // Straßennamen entlang der Straße
+    if (z >= 15) {
+      g.font = `600 ${z >= 17 ? 13 : 12}px system-ui, sans-serif`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.lineWidth = 3.5; g.strokeStyle = 'rgba(255,255,255,.9)'; g.fillStyle = '#333';
+      const placed = [];
+      vec.roads.forEach((f) => {
+        if (!f.n || (f.k !== 'a' && f.k !== 'b') || !vis(f)) return;
+        const a = f.a;
+        let best = null;
+        for (let i = 0; i + 3 < a.length; i += 2) {
+          const p1 = project(a[i], a[i + 1], z), p2 = project(a[i + 2], a[i + 3], z);
+          const x1 = p1.x - left, y1 = p1.y - top, x2 = p2.x - left, y2 = p2.y - top;
+          const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+          if (mx < 20 || my < 20 || mx > w - 20 || my > h - 20) continue;
+          const L = Math.hypot(x2 - x1, y2 - y1);
+          if (!best || L > best.L) best = { L, mx, my, ang: Math.atan2(y2 - y1, x2 - x1) };
+        }
+        if (!best) return;
+        const tw = g.measureText(f.n).width;
+        if (best.L < tw + 14) return;
+        if (placed.some((q) => q.n === f.n && Math.hypot(q.x - best.mx, q.y - best.my) < 220)) return;
+        placed.push({ n: f.n, x: best.mx, y: best.my });
+        let ang = best.ang;
+        if (ang > Math.PI / 2 || ang < -Math.PI / 2) ang += Math.PI;
+        g.save();
+        g.translate(best.mx, best.my); g.rotate(ang);
+        g.strokeText(f.n, 0, 0); g.fillText(f.n, 0, 0);
+        g.restore();
+      });
+    }
+
+    // Hausnummern bei starker Vergrößerung
+    if (z >= 18 && adressen.length) {
+      g.font = '600 11px system-ui, sans-serif';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.lineWidth = 3; g.strokeStyle = 'rgba(255,255,255,.9)'; g.fillStyle = '#555';
+      adressen.forEach((a) => {
+        if (a.lat > tl.lat || a.lat < br.lat || a.lng < tl.lng || a.lng > br.lng) return;
+        const q = project(a.lat, a.lng, z);
+        g.strokeText(a.n, q.x - left, q.y - top); g.fillText(a.n, q.x - left, q.y - top);
+      });
+    }
+  }
+
+  function updateBaseButtons() {
+    const v = base === 'vec';
+    $('#m-base-vec').classList.toggle('secondary', !v);
+    $('#m-base-osm').classList.toggle('secondary', v);
+  }
+  function setBase(b) {
+    base = b;
+    try { localStorage.setItem('wk_base', b); } catch (e) { /* ignorieren */ }
+    updateBaseButtons();
+    render();
+  }
+
   const tileEls = new Map();
   let rafPending = false;
   function scheduleRender() {
@@ -124,12 +285,18 @@
     const c = project(view.lat, view.lng, z);
     const left = c.x - w / 2, top = c.y - h / 2;
     const n = Math.pow(2, z);
+    const useVec = base === 'vec' && !!vec;
+    tilesEl.style.display = useVec ? 'none' : '';
+    vecEl.style.display = useVec ? '' : 'none';
+    if (useVec) drawVec(w, h, z, left, top);
+    const b = vec && vec.bounds;
+    $('#outside').style.display = (useVec && b && (view.lat < b[0] - 0.004 || view.lat > b[2] + 0.004 || view.lng < b[1] - 0.006 || view.lng > b[3] + 0.006)) ? 'block' : 'none';
 
     // Kacheln
     const needed = new Set();
     const x0 = Math.floor(left / TILE), x1 = Math.floor((left + w) / TILE);
     const y0 = Math.floor(top / TILE), y1 = Math.floor((top + h) / TILE);
-    for (let y = y0; y <= y1; y++) {
+    for (let y = y0; !useVec && y <= y1; y++) {
       if (y < 0 || y >= n) continue;
       for (let x = x0; x <= x1; x++) {
         const key = z + '/' + x + '/' + y;
@@ -228,7 +395,7 @@
   function updateHint() {
     const h = $('#hint');
     if (mode === 'neu') h.textContent = 'Tippe dorthin, wo die Entnahmestelle liegt. Vorhandene Stellen antippen = bearbeiten.';
-    else if (!einsatz) h.textContent = 'Tippe auf die Karte, um den Einsatzort zu setzen.';
+    else if (!einsatz) h.textContent = 'Adresse eingeben oder die Karte antippen, um den Einsatzort zu setzen.';
     else h.textContent = '';
   }
 
@@ -236,6 +403,7 @@
     const box = $('#result');
     box.textContent = '';
     updateHint();
+    if (mode === 'einsatz' && $('#q').value.trim()) { renderSuggestions($('#q').value); return; }
 
     if (mode === 'neu') {
       const p = document.createElement('div');
@@ -256,10 +424,14 @@
     const head = document.createElement('div');
     head.className = 'res-head';
     const lbl = document.createElement('span');
-    lbl.textContent = `Nächste Entnahmestellen (Luftlinie ab Einsatzort)`;
+    lbl.textContent = 'Nächste Stellen ab ' + (einsatzLabel || 'Einsatzort (Karte)');
+    const sub = document.createElement('small');
+    sub.style.display = 'block';
+    sub.textContent = 'Luftlinie · zum Korrigieren Karte antippen';
+    lbl.appendChild(sub);
     const x = document.createElement('button');
     x.textContent = '✕'; x.setAttribute('aria-label', 'Einsatzort löschen');
-    x.onclick = () => { einsatz = null; refresh(); };
+    x.onclick = () => { einsatz = null; einsatzLabel = null; refresh(); };
     head.append(lbl, x);
     box.appendChild(head);
 
@@ -279,12 +451,18 @@
       const rank = document.createElement('div'); rank.className = 'r-rank'; rank.textContent = i + 1;
       const info = document.createElement('div'); info.className = 'r-info';
       const b = document.createElement('b'); b.textContent = r.s.name || t.label;
-      const sm = document.createElement('small');
-      const parts = [t.label];
-      if (r.s.lmin) parts.push(r.s.lmin + ' l/min');
-      if (r.s.bem) parts.push(r.s.bem);
-      sm.textContent = parts.join(' · ');
-      info.append(b, sm);
+      info.appendChild(b);
+      if (r.s.name) {
+        const sm = document.createElement('small');
+        sm.textContent = t.label;
+        info.appendChild(sm);
+      }
+      if (r.s.bem) {
+        const bm = document.createElement('div');
+        bm.className = 'r-bem';
+        bm.textContent = r.s.bem;
+        info.appendChild(bm);
+      }
       const dist = document.createElement('div'); dist.className = 'r-dist';
       dist.textContent = fmtDist(r.d);
       const dir = document.createElement('small'); dir.textContent = dirName(r.b);
@@ -306,6 +484,7 @@
     mode = m;
     $('#mode-einsatz').classList.toggle('on', m === 'einsatz');
     $('#mode-neu').classList.toggle('on', m === 'neu');
+    $('#search').style.display = m === 'einsatz' ? 'flex' : 'none';
     refresh();
   }
   $('#mode-einsatz').onclick = () => setMode('einsatz');
@@ -394,11 +573,11 @@
       const d = Math.hypot(p.x - c.x + w / 2 - px, p.y - c.y + h / 2 - py);
       if (d < best) { best = d; hit = s; }
     });
-    if (hit) { openStelleDialog(hit, null); return; }
+    if (hit && mode === 'neu') { openStelleDialog(hit, null); return; }
 
     const ll = pixelToLatLng(px, py);
     if (mode === 'neu') openStelleDialog(null, ll);
-    else { einsatz = { lat: ll.lat, lng: ll.lng }; refresh(); }
+    else { einsatz = { lat: ll.lat, lng: ll.lng }; einsatzLabel = null; $('#q').value = ''; refresh(); }
   }
 
   $('#zin').onclick = () => zoomBy(1);
@@ -439,8 +618,7 @@
     pendingPos = stelle ? { lat: stelle.lat, lng: stelle.lng } : pos;
     $('#dlg-title').textContent = stelle ? 'Entnahmestelle bearbeiten' : 'Neue Entnahmestelle';
     $('#f-name').value = stelle ? (stelle.name || '') : '';
-    fTyp.value = stelle ? (stelle.typ || 'sonst') : 'hydrant';
-    $('#f-lmin').value = stelle && stelle.lmin ? stelle.lmin : '';
+    fTyp.value = stelle ? (stelle.typ || 'sonst') : 'unterflur';
     $('#f-bem').value = stelle ? (stelle.bem || '') : '';
     $('#f-del').style.display = stelle ? '' : 'none';
     showCoords();
@@ -459,11 +637,9 @@
   };
   $('#f-save').onclick = () => {
     if (!pendingPos) return;
-    const lm = parseInt($('#f-lmin').value, 10);
     const data = {
       name: $('#f-name').value.trim(),
       typ: fTyp.value,
-      lmin: isFinite(lm) && lm > 0 ? lm : null,
       bem: $('#f-bem').value.trim(),
       lat: pendingPos.lat,
       lng: pendingPos.lng,
@@ -485,9 +661,13 @@
     $('#m-info').textContent = `${stellen.length} Entnahmestelle(n) auf diesem Gerät gespeichert.`;
     $('#m-msg').textContent = '';
     $('#m-progress').textContent = '';
+    updateBaseButtons();
     dm.showModal();
   };
   $('#m-close').onclick = () => dm.close();
+  $('#m-base-vec').onclick = () => setBase('vec');
+  $('#m-base-osm').onclick = () => setBase('osm');
+  $('#m-home').onclick = () => { homeView(); dm.close(); };
 
   $('#m-clear').onclick = () => {
     if (!stellen.length) return;
@@ -531,6 +711,7 @@
       let added = 0, updated = 0, skipped = 0;
       list.forEach((s) => {
         if (!validStelle(s)) { skipped++; return; }
+        normStelle(s);
         const ex = stellen.find((x) => x.id === s.id);
         if (!ex) { stellen.push(s); added++; }
         else if ((s.ts || 0) > (ex.ts || 0)) { Object.assign(ex, s); updated++; }
@@ -554,20 +735,26 @@
     const c = project(view.lat, view.lng, view.z);
     const tl = unproject(c.x - w * 0.75, c.y - h * 0.75, view.z);
     const br = unproject(c.x + w * 0.75, c.y + h * 0.75, view.z);
-    const jobs = [];
-    for (let z = 15; z <= 18; z++) {
-      const n = Math.pow(2, z);
-      const a = project(tl.lat, tl.lng, z), b = project(br.lat, br.lng, z);
-      const xa = Math.floor(a.x / TILE), xb = Math.floor(b.x / TILE);
-      const ya = Math.floor(a.y / TILE), yb = Math.floor(b.y / TILE);
-      for (let y = Math.max(0, ya); y <= Math.min(n - 1, yb); y++)
-        for (let x = Math.max(0, xa); x <= Math.min(n - 1, xb); x++) jobs.push([z, x, y]);
-    }
-    if (jobs.length > 900) {
-      alert(`Der Ausschnitt ist zu groß (${jobs.length} Kacheln). Bitte weiter hineinzoomen und erneut versuchen.`);
+    const build = (zmax) => {
+      const out = [];
+      for (let z = 15; z <= zmax; z++) {
+        const n = Math.pow(2, z);
+        const a = project(tl.lat, tl.lng, z), b = project(br.lat, br.lng, z);
+        const xa = Math.floor(a.x / TILE), xb = Math.floor(b.x / TILE);
+        const ya = Math.floor(a.y / TILE), yb = Math.floor(b.y / TILE);
+        for (let y = Math.max(0, ya); y <= Math.min(n - 1, yb); y++)
+          for (let x = Math.max(0, xa); x <= Math.min(n - 1, xb); x++) out.push([z, x, y]);
+      }
+      return out;
+    };
+    let zmax = 18, jobs = build(zmax);
+    while (jobs.length > MAX_TILES && zmax > 15) { zmax--; jobs = build(zmax); }
+    if (jobs.length > MAX_TILES) {
+      alert(`Der Ausschnitt ist zu groß (${jobs.length} Kacheln). Bitte etwas hineinzoomen und erneut versuchen.`);
       return;
     }
-    if (!confirm(`${jobs.length} Kartenkacheln (ca. ${Math.max(1, Math.round(jobs.length * 0.02))} MB) auf diesem Gerät speichern?`)) return;
+    const note = zmax < 18 ? `\n\nDer Ausschnitt ist groß, deshalb wird nur bis Zoomstufe ${zmax} gespeichert (weniger Detail beim Hineinzoomen).` : '';
+    if (!confirm(`${jobs.length} Kartenkacheln (ca. ${Math.max(1, Math.round(jobs.length * 0.02))} MB) auf diesem Gerät speichern?${note}`)) return;
 
     prefetching = true;
     const prog = $('#m-progress');
@@ -594,6 +781,159 @@
       ? `Fertig, aber ${failed} Kachel(n) fehlen. Bitte mit besserer Verbindung wiederholen.`
       : `Fertig: ${jobs.length} Kacheln gespeichert. Die Karte funktioniert für diesen Ausschnitt jetzt offline.`;
   };
+
+  // Ausschnitt so wählen, dass Einsatzort und nächste Stellen sichtbar sind
+  function fitView(points) {
+    const w = mapEl.clientWidth, h = mapEl.clientHeight;
+    if (!w || !h || !points.length) return;
+    let z = 18, box = null;
+    for (; z >= MINZ; z--) {
+      const px = points.map((p) => project(p.lat, p.lng, z));
+      const xs = px.map((q) => q.x), ys = px.map((q) => q.y);
+      box = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+      if (box.x1 - box.x0 <= w - 110 && box.y1 - box.y0 <= h - 130) break;
+    }
+    z = Math.max(z, MINZ);
+    const mid = unproject((box.x0 + box.x1) / 2, (box.y0 + box.y1) / 2, z);
+    setView(mid.lat, mid.lng, z);
+  }
+
+  // ---------- Adresssuche ----------
+  function normText(t) {
+    return String(t || '').toLowerCase().replace(/ß/g, 'ss').replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/[^a-z0-9]/g, '');
+  }
+  const normStreet = (t) => normText(t).replace(/strasse$/, 'str');
+
+  fetch('addresses.json')
+    .then((r) => (r.ok ? r.json() : []))
+    .then((a) => {
+      if (!Array.isArray(a)) return;
+      adressen = a.filter((x) => x && x.s && isFinite(x.lat) && isFinite(x.lng));
+      adressen.forEach((x) => { x._s = normStreet(x.s); x._n = normText(x.n); });
+    })
+    .catch(() => { /* ohne Adressliste nur Online-Suche / Kartentipp */ });
+
+  // final = true: Nutzer hat „Suchen“ gedrückt (nicht nur getippt)
+  function searchLocal(q, final) {
+    const m = q.trim().match(/^(.*?)[\s,]*(\d+\s*[a-zA-Z]?)?$/);
+    const st = normStreet(m ? m[1] : q);
+    const nr = normText(m && m[2] ? m[2] : '');
+    if (st.length < 2) return { items: [], approx: false };
+    const inStreet = adressen.filter((a) => a._s.includes(st));
+    const items = inStreet
+      .filter((a) => !nr || a._n.startsWith(nr))
+      .sort((a, b) => ((b._n === nr) - (a._n === nr)) || a._s.localeCompare(b._s) || ((parseInt(a.n, 10) || 0) - (parseInt(b.n, 10) || 0)));
+    const exact = items.filter((a) => a._n === nr);
+    if (!final || !nr || exact.length) return { items: items.slice(0, 8), approx: false };
+    // Hausnummer nicht in den Daten: nächstgelegene Nummern derselben Straße anbieten
+    const want = parseInt(nr, 10);
+    if (!isFinite(want) || !inStreet.length) return { items: [], approx: false };
+    const near = inStreet
+      .map((a) => ({ a, v: parseInt(a.n, 10) }))
+      .filter((x) => isFinite(x.v))
+      .sort((x, y) => ((x.v % 2 !== want % 2) - (y.v % 2 !== want % 2)) || (Math.abs(x.v - want) - Math.abs(y.v - want)))
+      .slice(0, 4)
+      .map((x) => x.a);
+    return { items: near, approx: true };
+  }
+  const labelOf = (a) => `${a.s} ${a.n || ''}`.trim();
+
+  function showPicks(items, emptyMsg, extraBtn) {
+    const box = $('#result');
+    box.textContent = '';
+    if (items.length) {
+      const ol = document.createElement('ol');
+      ol.className = 'list';
+      items.forEach((it) => {
+        const li = document.createElement('li');
+        const info = document.createElement('div');
+        info.className = 'r-info';
+        const b = document.createElement('b');
+        b.textContent = it.label;
+        info.appendChild(b);
+        if (it.sub) {
+          const sm = document.createElement('small');
+          sm.textContent = it.sub;
+          info.appendChild(sm);
+        }
+        li.appendChild(info);
+        li.onclick = () => pickAddress(it);
+        ol.appendChild(li);
+      });
+      box.appendChild(ol);
+    } else if (emptyMsg) {
+      const p = document.createElement('div');
+      p.className = 'empty';
+      p.textContent = emptyMsg;
+      box.appendChild(p);
+    }
+    if (extraBtn) box.appendChild(extraBtn);
+  }
+
+  function renderSuggestions(q, final) {
+    const res = searchLocal(q, final);
+    const items = res.items.map((a) => ({ label: labelOf(a) + (res.approx ? ' (ungefähr)' : ''), sub: ORT, lat: a.lat, lng: a.lng }));
+    let btn = null;
+    if (navigator.onLine) {
+      btn = document.createElement('button');
+      btn.className = 'online-btn';
+      btn.textContent = 'Online suchen (OpenStreetMap)';
+      btn.onclick = () => onlineSearch(q);
+    }
+    const empty = adressen.length
+      ? 'Keine passende Adresse gespeichert.'
+      : 'Adressliste ist noch nicht in der App hinterlegt.' + (navigator.onLine ? '' : ' Offline bitte die Karte antippen.');
+    showPicks(items, empty, btn);
+    if (res.approx) {
+      const note = document.createElement('div');
+      note.className = 'empty';
+      note.textContent = 'Diese Hausnummer ist in den Daten nicht vorhanden. Nächstgelegene Nummern – danach den Einsatzort bei Bedarf per Tipp auf die Karte korrigieren:';
+      $('#result').insertBefore(note, $('#result').firstChild);
+    }
+  }
+
+  async function onlineSearch(q) {
+    showPicks([], 'Suche …');
+    try {
+      const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=de&accept-language=de&q=' + encodeURIComponent(q + ', ' + ORT);
+      const res = await fetch(url);
+      const j = await res.json();
+      const items = (Array.isArray(j) ? j : [])
+        .map((r) => ({ label: String(r.display_name || '').split(',').slice(0, 3).join(',').trim(), sub: 'OpenStreetMap', lat: parseFloat(r.lat), lng: parseFloat(r.lon) }))
+        .filter((r) => isFinite(r.lat) && isFinite(r.lng));
+      showPicks(items, 'Nichts gefunden. Bitte Schreibweise prüfen oder die Karte antippen.');
+    } catch (e) {
+      showPicks([], 'Online-Suche nicht möglich. Bitte die Karte antippen.');
+    }
+  }
+
+  function pickAddress(it) {
+    einsatz = { lat: it.lat, lng: it.lng };
+    einsatzLabel = it.label;
+    $('#q').value = '';
+    $('#q').blur();
+    fitView([einsatz].concat(nearest().map((r) => r.s)));
+    refresh();
+  }
+
+  function runSearch() {
+    const q = $('#q').value.trim();
+    if (!q) return;
+    const res = searchLocal(q, true);
+    const local = res.items;
+    if (res.approx) { renderSuggestions(q, true); return; }
+    const nm = q.match(/(\d+\s*[a-zA-Z]?)\s*$/);
+    const nr = nm ? normText(nm[1]) : '';
+    const exact = nr ? local.filter((a) => a._n === nr) : [];
+    const one = exact.length === 1 ? exact[0] : (local.length === 1 ? local[0] : null);
+    if (one) pickAddress({ label: labelOf(one), lat: one.lat, lng: one.lng });
+    else if (local.length > 1) renderSuggestions(q, true);
+    else if (navigator.onLine) onlineSearch(q);
+    else renderSuggestions(q, true);
+  }
+  $('#q-go').onclick = runSearch;
+  $('#q').addEventListener('input', updateResult);
+  $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
 
   // ---------- Online-Status & Service Worker ----------
   function updateNet() {
