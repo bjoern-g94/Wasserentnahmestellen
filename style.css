@@ -124,3 +124,19 @@ dialog .spacer { flex: 1; }
 
 #vec { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 #outside { display: none; position: absolute; left: 10px; right: 70px; bottom: 34px; background: rgba(255,243,205,.96); border: 1px solid #e0b84a; border-radius: 8px; padding: 6px 10px; font-size: 13px; pointer-events: none; }
+
+#pflege { display: none; padding: 8px 10px 4px; background: #e3f2fd; border-bottom: 1px solid #90caf9; }
+#pflege .p-head { display: flex; align-items: center; justify-content: space-between; color: #0d47a1; }
+#pflege .muted { margin: 4px 0 8px; }
+#p-done { min-height: 44px; padding: 0 20px; border: 0; border-radius: 10px; background: #0d47a1; color: #fff; font-size: 16px; font-weight: 600; }
+#p-gps { width: 100%; min-height: 50px; border: 0; border-radius: 10px; background: #1565c0; color: #fff; font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+body.pflege #top { background: #0d47a1; }
+.lbl { margin: 10px 0 4px; font-size: 14px; color: #444; }
+.typ-btns { display: flex; gap: 6px; }
+.typ-btns button { flex: 1; min-height: 56px; padding: 0 4px; font-size: 14px; background: #e0e0e0; color: #222; }
+.typ-btns button.on { background: var(--red); color: #fff; }
+
+#search { flex-wrap: wrap; }
+#q-street { flex: 1 1 150px; min-width: 0; min-height: 46px; padding: 0 8px; font: inherit; font-size: 16px; border: 2px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); }
+#q-other { flex: 1 1 100%; min-height: 46px; padding: 0 12px; font: inherit; font-size: 16px; border: 2px solid var(--line); border-radius: 10px; background: #fff; }
+#q-nr { flex: 0 0 74px; min-width: 0; min-height: 46px; padding: 0 8px; font: inherit; font-size: 18px; text-align: center; border: 2px solid var(--line); border-radius: 10px; background: #fff; }

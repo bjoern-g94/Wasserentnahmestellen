@@ -40,12 +40,15 @@
 </main>
 
 <section id="sheet">
-  <div id="modes">
-    <button id="mode-einsatz" class="on">📍 Einsatzort</button>
-    <button id="mode-neu">➕ Stelle eintragen</button>
+  <div id="pflege">
+    <div class="p-head"><b>🛠 Pflegemodus</b><button id="p-done" type="button">Fertig</button></div>
+    <p class="muted">Karte antippen, um eine Entnahmestelle einzutragen – oder direkt vor Ort:</p>
+    <button id="p-gps" type="button">📍 Am eigenen Standort eintragen</button>
   </div>
   <div id="search">
-    <input id="q" type="search" placeholder="Adresse, z. B. Adolphsdorfer Str. 12" autocomplete="off" autocorrect="off" autocapitalize="off" enterkeyhint="search">
+    <select id="q-street" aria-label="Straße"></select>
+    <input id="q-other" type="text" placeholder="Straße eingeben, z. B. Findorffstraße" autocomplete="off" autocorrect="off" style="display:none">
+    <input id="q-nr" type="text" inputmode="numeric" maxlength="6" placeholder="Nr." aria-label="Hausnummer" autocomplete="off" enterkeyhint="search">
     <button id="q-go" type="button">Suchen</button>
   </div>
   <div id="result"></div>
@@ -57,9 +60,9 @@
   <label>Bezeichnung
     <input id="f-name" type="text" placeholder="z. B. vor Hausnummer 12" autocomplete="off">
   </label>
-  <label>Art
-    <select id="f-typ"></select>
-  </label>
+  <div class="lbl">Art</div>
+  <div id="f-typ-btns" class="typ-btns"></div>
+  <select id="f-typ" style="display:none"></select>
   <label>Bemerkung (optional)
     <textarea id="f-bem" rows="2" placeholder="z. B. Deckel links vom Gehweg"></textarea>
   </label>
@@ -78,6 +81,10 @@
   <h2>Daten &amp; Offline</h2>
   <p id="m-info" class="muted"></p>
 
+  <h3>Entnahmestellen pflegen</h3>
+  <p class="muted">Nur bei der Ersteinrichtung oder bei Änderungen nötig. Im Pflegemodus trägst du Stellen per Tipp auf die Karte oder an deinem Standort ein.</p>
+  <button id="m-pflege" type="button" style="width:100%">Pflegemodus starten</button>
+
   <h3>Kartenansicht</h3>
   <p class="muted">Die eigene Karte ist in der App eingebaut (Straßen, Gebäude, Gewässer rund um das Einsatzgebiet) und braucht kein Internet. OSM-Kartenbilder sehen gewohnt aus, brauchen aber Internet oder einen vorher gespeicherten Ausschnitt.</p>
   <div class="row">
@@ -92,7 +99,7 @@
   <p id="m-progress" class="muted"></p>
 
   <h3>Daten zwischen Geräten</h3>
-  <p class="muted">Die Stellen liegen nur auf diesem Gerät. Zum Abgleich: exportieren und auf dem anderen Gerät importieren.</p>
+  <p class="muted">„Exportieren“ erzeugt die Datei <b>stellen.json</b>. Wird sie im GitHub-Repository hochgeladen (ersetzt die alte), übernehmen alle Geräte die Stellen beim nächsten Start mit Internet. „Importieren“ fügt eine Datei nur auf diesem Gerät hinzu.</p>
   <div class="row">
     <button id="m-export" type="button">Exportieren</button>
     <button id="m-import" class="secondary" type="button">Importieren</button>

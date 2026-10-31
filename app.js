@@ -6,6 +6,9 @@
   const TILE_CACHE = 'wk-tiles-v1';
   const KEY_DATA = 'wk_stellen_v1';
   const KEY_VIEW = 'wk_view_v1';
+  const KEY_STAND = 'wk_stammdaten_stand';   // Stand der zuletzt übernommenen stellen.json
+  const KEY_DIRTY = 'wk_dirty';              // lokale Änderungen, die noch nicht exportiert wurden
+  const KEY_DECL = 'wk_declined_stand';      // Stand, dessen Übernahme abgelehnt wurde
   const MINZ = 12, MAXZ = 19;
   const NEAREST_N = 5;
   const MAX_TILES = 2500;   // Obergrenze für den Offline-Kartendownload
@@ -35,6 +38,9 @@
   let base = 'vec';          // 'vec' = eingebaute Karte, 'osm' = OSM-Kartenbilder
   try { base = localStorage.getItem('wk_base') || 'vec'; } catch (e) { /* ignorieren */ }
   let vec = null;           // eingebaute Kartendaten
+  let extra = 0;            // wie oft „Weitere anzeigen“ gedrückt wurde (je 2 Stellen)
+  let lastTyp = 'unterflur';
+  try { lastTyp = localStorage.getItem('wk_last_typ') || 'unterflur'; } catch (e) { /* ignorieren */ }
   let pendingPos = null;     // Position für neue / bearbeitete Stelle
   let adressen = [];         // Offline-Adressliste (addresses.json)
   let einsatzLabel = null;   // Beschriftung des Einsatzorts (Adresse), sonst null
@@ -46,9 +52,15 @@
       return Array.isArray(a) ? a.filter(validStelle).map(normStelle) : [];
     } catch (e) { return []; }
   }
-  function saveStellen() {
+  let dirty = false;
+  try { dirty = localStorage.getItem(KEY_DIRTY) === '1'; } catch (e) { /* ignorieren */ }
+  function saveStellen(fromMaster) {
     try { localStorage.setItem(KEY_DATA, JSON.stringify(stellen)); }
     catch (e) { alert('Speichern auf diesem Gerät ist fehlgeschlagen. Bitte Speicherplatz bzw. Browser-Einstellungen prüfen.'); }
+    if (!fromMaster) {
+      dirty = true;
+      try { localStorage.setItem(KEY_DIRTY, '1'); } catch (e) { /* ignorieren */ }
+    }
   }
   function loadView() {
     try {
@@ -118,10 +130,16 @@
   // ---------- Nächste Stellen ----------
   function nearest() {
     if (!einsatz) return [];
-    return stellen
+    const all = stellen
       .map((s) => ({ s, d: distanceM(einsatz, s), b: bearing(einsatz, s) }))
-      .sort((a, b) => a.d - b.d)
-      .slice(0, NEAREST_N);
+      .sort((a, b) => a.d - b.d);
+    // Grundauswahl: nächster Unterflurhydrant + die zwei nächsten anderen Arten
+    const uh = all.find((r) => r.s.typ === 'unterflur');
+    const base = (uh ? [uh] : []).concat(all.filter((r) => r.s.typ !== 'unterflur').slice(0, 2));
+    base.sort((a, b) => a.d - b.d);
+    // Weitere: je Klick die zwei nächsten, unabhängig von der Art
+    const more = all.filter((r) => !base.includes(r)).slice(0, extra * 2);
+    return base.concat(more);
   }
 
   // ---------- Kartendarstellung ----------
@@ -320,7 +338,7 @@
     }
 
     // Marker und Linien
-    const near = nearest();
+    const near = mode === 'einsatz' ? nearest() : [];
     const rankOf = new Map(near.map((r, i) => [r.s.id, i + 1]));
     markersEl.textContent = '';
     linesEl.textContent = '';
@@ -403,15 +421,38 @@
     const box = $('#result');
     box.textContent = '';
     updateHint();
-    if (mode === 'einsatz' && $('#q').value.trim()) { renderSuggestions($('#q').value); return; }
+    if (mode === 'einsatz' && qActive()) { renderSuggestions(qText()); return; }
 
     if (mode === 'neu') {
-      const p = document.createElement('div');
-      p.className = 'empty';
-      p.textContent = stellen.length
-        ? stellen.length + ' Entnahmestelle(n) gespeichert. Karte antippen, um eine weitere einzutragen.'
-        : 'Noch keine Entnahmestellen gespeichert. Karte antippen, um die erste einzutragen.';
-      box.appendChild(p);
+      const head = document.createElement('div');
+      head.className = 'res-head';
+      const lbl = document.createElement('span');
+      lbl.textContent = stellen.length + ' Entnahmestelle(n) eingetragen – zum Bearbeiten antippen';
+      head.appendChild(lbl);
+      box.appendChild(head);
+      const order = Object.keys(TYPEN);
+      const sorted = stellen.slice().sort((a, b) => (order.indexOf(a.typ) - order.indexOf(b.typ)) || (a.name || '').localeCompare(b.name || '', 'de'));
+      const ol = document.createElement('ol');
+      ol.className = 'list';
+      sorted.forEach((s) => {
+        const t = TYPEN[s.typ] || TYPEN.sonst;
+        const li = document.createElement('li');
+        const badge = document.createElement('div');
+        badge.className = 'r-rank';
+        badge.style.background = t.color; badge.style.color = '#fff';
+        badge.textContent = t.short;
+        const info = document.createElement('div');
+        info.className = 'r-info';
+        const b = document.createElement('b');
+        b.textContent = s.name || t.label;
+        info.appendChild(b);
+        if (s.name) { const sm = document.createElement('small'); sm.textContent = t.label; info.appendChild(sm); }
+        if (s.bem) { const bm = document.createElement('div'); bm.className = 'r-bem'; bm.textContent = s.bem; info.appendChild(bm); }
+        li.append(badge, info);
+        li.onclick = () => { setView(s.lat, s.lng, Math.max(view.z, 18)); openStelleDialog(s, null); };
+        ol.appendChild(li);
+      });
+      box.appendChild(ol);
       return;
     }
     if (!einsatz) {
@@ -431,7 +472,7 @@
     lbl.appendChild(sub);
     const x = document.createElement('button');
     x.textContent = '✕'; x.setAttribute('aria-label', 'Einsatzort löschen');
-    x.onclick = () => { einsatz = null; einsatzLabel = null; refresh(); };
+    x.onclick = () => { einsatz = null; einsatzLabel = null; extra = 0; refresh(); };
     head.append(lbl, x);
     box.appendChild(head);
 
@@ -439,7 +480,7 @@
     if (!near.length) {
       const p = document.createElement('div');
       p.className = 'empty';
-      p.textContent = 'Noch keine Entnahmestellen eingetragen. Wechsle auf „Stelle eintragen“.';
+      p.textContent = 'Noch keine Entnahmestellen eingetragen. Im Menü (☰) den Pflegemodus starten.';
       box.appendChild(p);
       return;
     }
@@ -472,6 +513,17 @@
       ol.appendChild(li);
     });
     box.appendChild(ol);
+    if (stellen.length > near.length) {
+      const btn = document.createElement('button');
+      btn.className = 'online-btn';
+      btn.textContent = 'Weitere Wasserentnahmestellen anzeigen';
+      btn.onclick = () => {
+        extra++;
+        fitView([einsatz].concat(nearest().map((r) => r.s)));
+        refresh();
+      };
+      box.appendChild(btn);
+    }
   }
 
   function refresh() {
@@ -482,13 +534,17 @@
   // ---------- Modus ----------
   function setMode(m) {
     mode = m;
-    $('#mode-einsatz').classList.toggle('on', m === 'einsatz');
-    $('#mode-neu').classList.toggle('on', m === 'neu');
+    document.body.classList.toggle('pflege', m === 'neu');
     $('#search').style.display = m === 'einsatz' ? 'flex' : 'none';
+    $('#pflege').style.display = m === 'neu' ? 'block' : 'none';
     refresh();
   }
-  $('#mode-einsatz').onclick = () => setMode('einsatz');
-  $('#mode-neu').onclick = () => setMode('neu');
+  $('#p-done').onclick = () => setMode('einsatz');
+  $('#p-gps').onclick = () => locate((p) => {
+    gps = p;
+    setView(p.lat, p.lng, Math.max(view.z, 18));
+    openStelleDialog(null, p);
+  });
 
   // ---------- Karteninteraktion ----------
   const pointers = new Map();
@@ -577,7 +633,7 @@
 
     const ll = pixelToLatLng(px, py);
     if (mode === 'neu') openStelleDialog(null, ll);
-    else { einsatz = { lat: ll.lat, lng: ll.lng }; einsatzLabel = null; $('#q').value = ''; refresh(); }
+    else { einsatz = { lat: ll.lat, lng: ll.lng }; einsatzLabel = null; extra = 0; clearQ(); refresh(); }
   }
 
   $('#zin').onclick = () => zoomBy(1);
@@ -601,10 +657,19 @@
   // ---------- Dialog: Entnahmestelle ----------
   const dlg = $('#dlg-stelle');
   const fTyp = $('#f-typ');
+  const typBtns = $('#f-typ-btns');
+  function setTyp(k) {
+    fTyp.value = k;
+    [...typBtns.children].forEach((b) => b.classList.toggle('on', b.dataset.k === k));
+  }
   Object.entries(TYPEN).forEach(([k, t]) => {
     const o = document.createElement('option');
     o.value = k; o.textContent = t.label;
     fTyp.appendChild(o);
+    const b = document.createElement('button');
+    b.type = 'button'; b.dataset.k = k; b.textContent = t.label;
+    b.onclick = () => setTyp(k);
+    typBtns.appendChild(b);
   });
 
   function showCoords() {
@@ -618,7 +683,7 @@
     pendingPos = stelle ? { lat: stelle.lat, lng: stelle.lng } : pos;
     $('#dlg-title').textContent = stelle ? 'Entnahmestelle bearbeiten' : 'Neue Entnahmestelle';
     $('#f-name').value = stelle ? (stelle.name || '') : '';
-    fTyp.value = stelle ? (stelle.typ || 'sonst') : 'unterflur';
+    setTyp(stelle ? (stelle.typ || 'sonst') : (TYPEN[lastTyp] ? lastTyp : 'unterflur'));
     $('#f-bem').value = stelle ? (stelle.bem || '') : '';
     $('#f-del').style.display = stelle ? '' : 'none';
     showCoords();
@@ -637,6 +702,8 @@
   };
   $('#f-save').onclick = () => {
     if (!pendingPos) return;
+    lastTyp = fTyp.value;
+    try { localStorage.setItem('wk_last_typ', lastTyp); } catch (e) { /* ignorieren */ }
     const data = {
       name: $('#f-name').value.trim(),
       typ: fTyp.value,
@@ -657,14 +724,23 @@
 
   // ---------- Dialog: Daten & Offline ----------
   const dm = $('#dlg-menu');
+  function infoText() {
+    let t = `${stellen.length} Entnahmestelle(n) auf diesem Gerät gespeichert.`;
+    try {
+      const st = localStorage.getItem(KEY_STAND);
+      if (st) t += ' Stand der Daten: ' + new Date(st).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) + '.';
+    } catch (e) { /* ignorieren */ }
+    return t;
+  }
   $('#btn-menu').onclick = () => {
-    $('#m-info').textContent = `${stellen.length} Entnahmestelle(n) auf diesem Gerät gespeichert.`;
+    $('#m-info').textContent = infoText();
     $('#m-msg').textContent = '';
     $('#m-progress').textContent = '';
     updateBaseButtons();
     dm.showModal();
   };
   $('#m-close').onclick = () => dm.close();
+  $('#m-pflege').onclick = () => { dm.close(); setMode('neu'); };
   $('#m-base-vec').onclick = () => setBase('vec');
   $('#m-base-osm').onclick = () => setBase('osm');
   $('#m-home').onclick = () => { homeView(); dm.close(); };
@@ -674,18 +750,25 @@
     if (!confirm('ALLE Entnahmestellen auf diesem Gerät löschen? Das kann nicht rückgängig gemacht werden.')) return;
     stellen = [];
     saveStellen();
-    $('#m-info').textContent = '0 Entnahmestelle(n) auf diesem Gerät gespeichert.';
+    $('#m-info').textContent = infoText();
     refresh();
   };
 
   $('#m-export').onclick = async () => {
-    const payload = { app: 'wasserkarte', version: 1, exportiert: new Date().toISOString(), stellen };
-    const name = 'wasserentnahmestellen-' + new Date().toISOString().slice(0, 10) + '.json';
+    const stand = new Date().toISOString();
+    const payload = { app: 'wasserkarte', version: 1, stand, stellen };
+    const name = 'stellen.json';
+    const markExported = () => {
+      try { localStorage.setItem(KEY_STAND, stand); localStorage.removeItem(KEY_DIRTY); } catch (e) { /* ignorieren */ }
+      dirty = false;
+      $('#m-info').textContent = infoText();
+    };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     try {
       const file = new File([blob], name, { type: 'application/json' });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: name });
+        markExported();
         return;
       }
     } catch (e) {
@@ -697,6 +780,7 @@
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    markExported();
   };
 
   $('#m-import').onclick = () => $('#m-file').click();
@@ -718,7 +802,7 @@
       });
       saveStellen();
       refresh();
-      $('#m-info').textContent = `${stellen.length} Entnahmestelle(n) auf diesem Gerät gespeichert.`;
+      $('#m-info').textContent = infoText();
       $('#m-msg').textContent = `Import: ${added} neu, ${updated} aktualisiert` + (skipped ? `, ${skipped} ungültig übersprungen` : '') + '.';
     } catch (err) {
       $('#m-msg').textContent = 'Die Datei konnte nicht gelesen werden.';
@@ -824,10 +908,10 @@
       .filter((a) => !nr || a._n.startsWith(nr))
       .sort((a, b) => ((b._n === nr) - (a._n === nr)) || a._s.localeCompare(b._s) || ((parseInt(a.n, 10) || 0) - (parseInt(b.n, 10) || 0)));
     const exact = items.filter((a) => a._n === nr);
-    if (!final || !nr || exact.length) return { items: items.slice(0, 8), approx: false };
+    if (!final || !nr || exact.length) return { items: items.slice(0, 8), approx: false, noStreet: !inStreet.length };
     // Hausnummer nicht in den Daten: nächstgelegene Nummern derselben Straße anbieten
     const want = parseInt(nr, 10);
-    if (!isFinite(want) || !inStreet.length) return { items: [], approx: false };
+    if (!isFinite(want) || !inStreet.length) return { items: [], approx: false, noStreet: !inStreet.length };
     const near = inStreet
       .map((a) => ({ a, v: parseInt(a.n, 10) }))
       .filter((x) => isFinite(x.v))
@@ -881,7 +965,7 @@
       btn.onclick = () => onlineSearch(q);
     }
     const empty = adressen.length
-      ? 'Keine passende Adresse gespeichert.'
+      ? (res.noStreet ? 'Für diese Straße sind keine Hausnummern gespeichert. Bitte die Karte antippen.' : 'Keine passende Adresse gespeichert.')
       : 'Adressliste ist noch nicht in der App hinterlegt.' + (navigator.onLine ? '' : ' Offline bitte die Karte antippen.');
     showPicks(items, empty, btn);
     if (res.approx) {
@@ -907,33 +991,83 @@
     }
   }
 
+  // ---------- Straße (Dropdown) + Hausnummer ----------
+  const STRASSEN = ['Adolphsdorfer Straße', 'Ottersteiner Straße', 'Tüschendorfer Straße', 'Neu-Bergedorfer Damm', 'Hasenweg'];
+  const selStreet = $('#q-street');
+  STRASSEN.concat(['__other__']).forEach((n) => {
+    const o = document.createElement('option');
+    o.value = n;
+    o.textContent = n === '__other__' ? 'Andere Straße …' : n;
+    selStreet.appendChild(o);
+  });
+  const isOther = () => selStreet.value === '__other__';
+  const streetName = () => (isOther() ? $('#q-other').value.trim() : selStreet.value);
+  const qNr = () => $('#q-nr').value.trim();
+  const qActive = () => qNr() !== '' || (isOther() && streetName().length >= 2);
+  const qText = () => (streetName() + ' ' + qNr()).trim();
+  function clearQ() { $('#q-nr').value = ''; $('#q-other').value = ''; }
+
+  // Karte auf die ganze Straße zoomen (damit man z. B. Straßen ohne Hausnummern per Tipp setzen kann)
+  function fitStreet(name) {
+    if (!vec || !name) return;
+    const key = normStreet(name);
+    const lats = [], lngs = [];
+    vec.roads.forEach((f) => {
+      if (f.n && normStreet(f.n) === key) for (let i = 0; i < f.a.length; i += 2) { lats.push(f.a[i]); lngs.push(f.a[i + 1]); }
+    });
+    if (!lats.length) return;
+    fitView([
+      { lat: Math.min(...lats), lng: Math.min(...lngs) },
+      { lat: Math.max(...lats), lng: Math.max(...lngs) }
+    ]);
+  }
+
   function pickAddress(it) {
     einsatz = { lat: it.lat, lng: it.lng };
     einsatzLabel = it.label;
-    $('#q').value = '';
-    $('#q').blur();
+    extra = 0;
+    clearQ();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     fitView([einsatz].concat(nearest().map((r) => r.s)));
     refresh();
   }
 
   function runSearch() {
-    const q = $('#q').value.trim();
-    if (!q) return;
+    const name = streetName();
+    if (name.length < 2) return;
+    if (!qNr()) {
+      fitStreet(name);
+      showPicks([], 'Bitte Hausnummer eingeben – oder die Karte antippen, um den Einsatzort zu setzen.');
+      return;
+    }
+    const q = qText();
     const res = searchLocal(q, true);
     const local = res.items;
     if (res.approx) { renderSuggestions(q, true); return; }
-    const nm = q.match(/(\d+\s*[a-zA-Z]?)\s*$/);
-    const nr = nm ? normText(nm[1]) : '';
+    const nr = normText(qNr());
     const exact = nr ? local.filter((a) => a._n === nr) : [];
     const one = exact.length === 1 ? exact[0] : (local.length === 1 ? local[0] : null);
     if (one) pickAddress({ label: labelOf(one), lat: one.lat, lng: one.lng });
     else if (local.length > 1) renderSuggestions(q, true);
+    else if (res.noStreet && STRASSEN.includes(name)) {
+      fitStreet(name);
+      showPicks([], 'Für ' + name + ' liegen keine Hausnummern in den Daten vor. Die Straße ist eingeblendet – bitte den Einsatzort per Tipp auf die Karte setzen.');
+    }
     else if (navigator.onLine) onlineSearch(q);
     else renderSuggestions(q, true);
   }
   $('#q-go').onclick = runSearch;
-  $('#q').addEventListener('input', updateResult);
-  $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+  ['#q-nr', '#q-other'].forEach((id) => {
+    const el = $(id);
+    el.addEventListener('input', updateResult);
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+  });
+  selStreet.addEventListener('change', () => {
+    $('#q-other').style.display = isOther() ? '' : 'none';
+    $('#q-nr').value = '';
+    if (isOther()) $('#q-other').focus(); else fitStreet(streetName());
+    updateResult();
+  });
 
   // ---------- Online-Status & Service Worker ----------
   function updateNet() {
@@ -951,6 +1085,35 @@
     });
   }
 
+  // ---------- Grundbestand (stellen.json im Repository) ----------
+  async function syncStammdaten() {
+    try {
+      const r = await fetch('stellen.json', { cache: 'no-cache' });
+      if (!r.ok) return;
+      const j = await r.json();
+      const list = Array.isArray(j) ? j : j.stellen;
+      const stand = j && j.stand ? String(j.stand) : '';
+      if (!Array.isArray(list) || !stand) return;           // leere Vorlage: nichts tun
+      const mine = localStorage.getItem(KEY_STAND) || '';
+      if (mine && stand <= mine) return;                    // nur neuere Daten übernehmen
+      if (dirty && stellen.length) {
+        if (localStorage.getItem(KEY_DECL) === stand) return;
+        const datum = new Date(stand).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' });
+        if (!confirm(`Neue Entnahmestellen-Daten verfügbar (Stand ${datum}).\n\nÄnderungen, die nur auf diesem Gerät gespeichert sind, gehen dabei verloren. Jetzt übernehmen?`)) {
+          localStorage.setItem(KEY_DECL, stand);
+          return;
+        }
+      }
+      stellen = list.filter(validStelle).map(normStelle);
+      saveStellen(true);
+      localStorage.setItem(KEY_STAND, stand);
+      localStorage.removeItem(KEY_DIRTY);
+      dirty = false;
+      refresh();
+    } catch (e) { /* offline oder keine Datei: lokale Daten bleiben */ }
+  }
+
   // ---------- Start ----------
   refresh();
+  syncStammdaten();
 })();

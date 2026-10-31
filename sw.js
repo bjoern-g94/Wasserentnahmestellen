@@ -1,6 +1,6 @@
 // Service Worker: macht die App offline nutzbar.
 // Bei Änderungen an den App-Dateien die Versionsnummer erhöhen.
-const APP_CACHE = 'wk-app-v4';
+const APP_CACHE = 'wk-app-v7';
 const TILE_CACHE = 'wk-tiles-v1';
 const SHELL = [
   './',
@@ -9,6 +9,7 @@ const SHELL = [
   './app.js',
   './addresses.json',
   './mapdata.json',
+  './stellen.json',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png'
@@ -47,6 +48,19 @@ self.addEventListener('fetch', (event) => {
           return Response.error();
         }
       })
+    );
+    return;
+  }
+
+  // Grundbestand der Entnahmestellen: erst Netz (damit Updates sofort ankommen), sonst Cache
+  if (url.origin === self.location.origin && url.pathname.endsWith('/stellen.json')) {
+    event.respondWith(
+      fetch(req, { cache: 'no-store' })
+        .then((res) => {
+          if (res && res.ok) { const c = res.clone(); caches.open(APP_CACHE).then((cc) => cc.put(req, c)); }
+          return res;
+        })
+        .catch(() => caches.open(APP_CACHE).then((cc) => cc.match(req, { ignoreSearch: true })).then((hit) => hit || Response.error()))
     );
     return;
   }
